@@ -996,7 +996,7 @@ async def test_complete_authorization_code_flow_scope_as_list(oauth_manager):
         "scope": ["read", "write", "admin"],  # List format
         "expires_in": 3600
     }
-    
+
     mock_token_storage = AsyncMock()
     mock_token_record = MagicMock()
     mock_token_record.expires_at = None
@@ -1031,7 +1031,7 @@ async def test_complete_authorization_code_flow_scope_as_string(oauth_manager):
         "scope": "read write admin",  # String format
         "expires_in": 3600
     }
-    
+
     mock_token_storage = AsyncMock()
     mock_token_record = MagicMock()
     mock_token_record.expires_at = None
@@ -1066,7 +1066,7 @@ async def test_complete_authorization_code_flow_scope_empty_string(oauth_manager
         "scope": "",  # Empty string
         "expires_in": 3600
     }
-    
+
     mock_token_storage = AsyncMock()
     mock_token_record = MagicMock()
     mock_token_record.expires_at = None
@@ -1101,7 +1101,7 @@ async def test_complete_authorization_code_flow_scope_invalid_type(oauth_manager
         "scope": 123,  # Invalid type (number)
         "expires_in": 3600
     }
-    
+
     mock_token_storage = AsyncMock()
     mock_token_record = MagicMock()
     mock_token_record.expires_at = None
