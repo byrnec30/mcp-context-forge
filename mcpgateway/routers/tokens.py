@@ -726,7 +726,7 @@ async def create_team_token(
             scope=scope,
             expires_in_days=request.expires_in_days,
             tags=request.tags,
-            team_id=team_id,  # This will validate team ownership
+            team_id=team_id,  # Validates team membership unless admin bypass applies
             caller_permissions=caller_permissions,
             is_admin=is_admin,  # Defense-in-depth: explicit admin flag
             is_active=request.is_active,

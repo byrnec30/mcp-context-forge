@@ -521,6 +521,7 @@ class TestTokenCatalogService:
 
         with pytest.raises(ValueError, match="User test@example.com is not an active member of team team-123. Only team members can create tokens for the team."):
             await token_service.create_token(user_email="test@example.com", name="Token", team_id="team-123")
+
     @pytest.mark.asyncio
     async def test_create_token_admin_bypass_with_unrestricted_permissions(self, token_service, mock_db, mock_user, mock_team):
         """Test admin bypass: un-narrowed platform admin can create team tokens without membership.
@@ -528,12 +529,20 @@ class TestTokenCatalogService:
         Security invariant: Requires caller_permissions=["*"] (un-narrowed admin).
         This supports service account workflows and centralized token management.
         """
-        mock_db.execute.return_value.scalar_one_or_none.side_effect = [
-            mock_user,  # User exists
-            mock_team,  # Team exists
-            # No membership check - admin bypass
-            None,  # No existing token with same name
-        ]
+        # Use return_value instead of side_effect to avoid brittle call-count coupling
+        mock_db.execute.return_value.scalar_one_or_none.return_value = None
+
+        # Override for specific queries we need to succeed
+        def scalar_one_or_none_side_effect():
+            call_count = mock_db.execute.call_count
+            if call_count == 1:
+                return mock_user  # User exists
+            elif call_count == 2:
+                return mock_team  # Team exists
+            # All other queries (membership check skipped, token name check) return None
+            return None
+
+        mock_db.execute.return_value.scalar_one_or_none.side_effect = scalar_one_or_none_side_effect
 
         with patch.object(token_service, "_generate_token", new_callable=AsyncMock) as mock_gen_token:
             mock_gen_token.return_value = "jwt_token_admin_bypass"
@@ -753,6 +762,22 @@ class TestTokenCatalogService:
         with patch.object(token_service, "get_user_team_ids", new_callable=AsyncMock, return_value=[]):
             with pytest.raises(ValueError, match="is not an active member of team"):
                 await token_service.list_team_tokens("team-123", "notmember@example.com")
+    @pytest.mark.asyncio
+    async def test_list_team_tokens_admin_bypass(self, token_service, mock_db, mock_api_token):
+        """Un-narrowed admin can list team tokens without membership."""
+        mock_result = MagicMock()
+        mock_result.scalars.return_value.all.return_value = [mock_api_token]
+        mock_db.execute.return_value = mock_result
+
+        with patch.object(token_service, "get_user_team_ids", new_callable=AsyncMock) as mock_team_ids:
+            tokens = await token_service.list_team_tokens(
+                "team-123", "admin@example.com",
+                caller_permissions=["*"], is_admin=True
+            )
+            mock_team_ids.assert_not_called()  # Admin bypass skips membership check
+
+        assert tokens == [mock_api_token]
+
 
     @pytest.mark.asyncio
     async def test_list_user_and_team_tokens_basic(self, token_service, mock_db, mock_api_token):
