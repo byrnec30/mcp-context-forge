@@ -1107,6 +1107,161 @@ class TestEdgeCases:
             assert call_args[1]["team_id"] == "team-auto"
 
 
+class TestAdminBypassRouterLevel:
+    """Router-level tests for admin bypass feature (PR review findings)."""
+
+    @pytest.mark.asyncio
+    async def test_create_team_token_admin_bypass_no_scope(self, mock_db, mock_admin_user, mock_token_record):
+        """Un-narrowed admin can create team token without scope (primary use case).
+
+        This is the critical test that would have caught the router bug where
+        caller_permissions was only fetched when request.scope was provided.
+        """
+        request = TokenCreateRequest(name="Admin Service Token", description="For automation")
+
+        with patch("mcpgateway.routers.tokens.TokenCatalogService") as mock_service_class:
+            with patch("mcpgateway.routers.tokens._get_caller_permissions") as mock_get_perms:
+                mock_get_perms.return_value = ["*"]  # Un-narrowed admin
+                mock_service = mock_service_class.return_value
+                mock_service.create_token = AsyncMock(return_value=(mock_token_record, "admin-bypass-token"))
+
+                result = await create_team_token(
+                    team_id="team-123",
+                    request=request,
+                    current_user=mock_admin_user,
+                    db=mock_db
+                )
+
+                # Verify _get_caller_permissions was called even without scope
+                mock_get_perms.assert_called_once()
+
+                # Verify service.create_token received both caller_permissions and is_admin
+                call_kwargs = mock_service.create_token.call_args[1]
+                assert call_kwargs["caller_permissions"] == ["*"]
+                assert call_kwargs["is_admin"] is True
+                assert call_kwargs["team_id"] == "team-123"
+                assert result.access_token == "admin-bypass-token"
+
+    @pytest.mark.asyncio
+    async def test_create_team_token_admin_bypass_with_scope(self, mock_db, mock_admin_user, mock_token_record):
+        """Un-narrowed admin can create team token with custom scope."""
+        from mcpgateway.schemas import TokenScopeRequest
+
+        request = TokenCreateRequest(
+            name="Scoped Admin Token",
+            description="With permissions",
+            scope=TokenScopeRequest(permissions=["tools.read"])
+        )
+
+        with patch("mcpgateway.routers.tokens.TokenCatalogService") as mock_service_class:
+            with patch("mcpgateway.routers.tokens._get_caller_permissions") as mock_get_perms:
+                mock_get_perms.return_value = ["*"]
+                mock_service = mock_service_class.return_value
+                mock_service.create_token = AsyncMock(return_value=(mock_token_record, "scoped-admin-token"))
+
+                result = await create_team_token(
+                    team_id="team-456",
+                    request=request,
+                    current_user=mock_admin_user,
+                    db=mock_db
+                )
+
+                # Verify both parameters passed
+                call_kwargs = mock_service.create_token.call_args[1]
+                assert call_kwargs["caller_permissions"] == ["*"]
+                assert call_kwargs["is_admin"] is True
+                assert result.access_token == "scoped-admin-token"
+
+    @pytest.mark.asyncio
+    async def test_create_token_base_endpoint_admin_bypass(self, mock_db, mock_admin_user, mock_token_record):
+        """Base POST /tokens endpoint also gets admin bypass for team tokens."""
+        request = TokenCreateRequest(
+            name="Base Endpoint Token",
+            description="Via base endpoint",
+            team_id="team-789"
+        )
+
+        with patch("mcpgateway.routers.tokens.TokenCatalogService") as mock_service_class:
+            with patch("mcpgateway.routers.tokens._get_caller_permissions") as mock_get_perms:
+                mock_get_perms.return_value = ["*"]
+                mock_service = mock_service_class.return_value
+                mock_service.create_token = AsyncMock(return_value=(mock_token_record, "base-endpoint-token"))
+
+                result = await create_token(
+                    request=request,
+                    current_user=mock_admin_user,
+                    db=mock_db
+                )
+
+                # Verify admin parameters passed through base endpoint
+                call_kwargs = mock_service.create_token.call_args[1]
+                assert call_kwargs["caller_permissions"] == ["*"]
+                assert call_kwargs["is_admin"] is True
+                assert call_kwargs["team_id"] == "team-789"
+                assert result.access_token == "base-endpoint-token"
+
+    @pytest.mark.asyncio
+    async def test_list_team_tokens_admin_bypass(self, mock_db, mock_admin_user, mock_token_record):
+        """Un-narrowed admin can list team tokens without membership."""
+        with patch("mcpgateway.routers.tokens.TokenCatalogService") as mock_service_class:
+            with patch("mcpgateway.routers.tokens._get_caller_permissions") as mock_get_perms:
+                mock_get_perms.return_value = ["*"]
+                mock_service = mock_service_class.return_value
+                mock_service.list_team_tokens = AsyncMock(return_value=[mock_token_record])
+                mock_service.count_team_tokens = AsyncMock(return_value=1)
+                mock_service.get_token_revocations_batch = AsyncMock(return_value={})
+
+                result = await list_team_tokens(
+                    team_id="team-999",
+                    current_user=mock_admin_user,
+                    db=mock_db
+                )
+
+                # Verify admin parameters passed to service
+                call_kwargs = mock_service.list_team_tokens.call_args[1]
+                assert call_kwargs["caller_permissions"] == ["*"]
+                assert call_kwargs["is_admin"] is True
+                assert len(result.tokens) == 1
+
+    @pytest.mark.asyncio
+    async def test_narrowed_admin_requires_membership(self, mock_db, mock_token_record):
+        """Narrowed admin (token_teams set) still requires team membership."""
+        narrowed_admin = {
+            "email": "narrowed@example.com",
+            "is_admin": True,
+            "token_teams": ["other-team"],  # Narrowed to different team
+            "permissions": ["tools.read"],
+            "db": mock_db,
+            "auth_method": "jwt",
+        }
+
+        request = TokenCreateRequest(name="Should Fail", description="Narrowed admin")
+
+        with patch("mcpgateway.routers.tokens.TokenCatalogService") as mock_service_class:
+            with patch("mcpgateway.routers.tokens._get_caller_permissions") as mock_get_perms:
+                mock_get_perms.return_value = ["tools.read"]  # NOT ["*"]
+                mock_service = mock_service_class.return_value
+                # Service will raise ValueError for non-member
+                mock_service.create_token = AsyncMock(
+                    side_effect=ValueError("User narrowed@example.com is not an active member of team team-blocked")
+                )
+
+                with pytest.raises(HTTPException) as exc_info:
+                    await create_team_token(
+                        team_id="team-blocked",
+                        request=request,
+                        current_user=narrowed_admin,
+                        db=mock_db
+                    )
+
+                assert exc_info.value.status_code == 400
+                # Verify is_admin was True but caller_permissions was NOT ["*"]
+                call_kwargs = mock_service.create_token.call_args[1]
+                assert call_kwargs["is_admin"] is True
+                assert call_kwargs["caller_permissions"] != ["*"]
+
+
+
 # ---------- Codex Review Findings: Regression Tests ----------
 
 

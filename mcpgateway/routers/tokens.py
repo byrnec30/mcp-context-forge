@@ -147,10 +147,12 @@ async def create_token(
 
     service = TokenCatalogService(db)
 
-    # Get caller permissions for scope containment (if custom scope requested)
-    caller_permissions = None
-    if request.scope and request.scope.permissions:
-        caller_permissions = await _get_caller_permissions(db, current_user, effective_team_id)
+    # CRITICAL: Always fetch caller_permissions for admin bypass check.
+    # The service needs this to determine if the caller is an un-narrowed admin
+    # who can bypass team membership requirements, regardless of whether a custom
+    # scope is provided.
+    caller_permissions = await _get_caller_permissions(db, current_user, effective_team_id)
+    is_admin = current_user.get("is_admin", False)
 
     # Convert request to TokenScope if provided
     scope = None
@@ -173,6 +175,7 @@ async def create_token(
             tags=request.tags,
             team_id=effective_team_id,
             caller_permissions=caller_permissions,
+            is_admin=is_admin,  # Defense-in-depth: explicit admin flag
             is_active=request.is_active,
         )
 
@@ -697,10 +700,12 @@ async def create_team_token(
 
     service = TokenCatalogService(db)
 
-    # Use team_id from path for permission context
-    caller_permissions = None
-    if request.scope and request.scope.permissions:
-        caller_permissions = await _get_caller_permissions(db, current_user, team_id)
+    # CRITICAL: Always fetch caller_permissions for admin bypass check.
+    # The service needs this to determine if the caller is an un-narrowed admin
+    # who can bypass team membership requirements, regardless of whether a custom
+    # scope is provided.
+    caller_permissions = await _get_caller_permissions(db, current_user, team_id)
+    is_admin = current_user.get("is_admin", False)
 
     # Convert request to TokenScope if provided
     scope = None
@@ -723,6 +728,7 @@ async def create_team_token(
             tags=request.tags,
             team_id=team_id,  # This will validate team ownership
             caller_permissions=caller_permissions,
+            is_admin=is_admin,  # Defense-in-depth: explicit admin flag
             is_active=request.is_active,
         )
 
@@ -801,13 +807,19 @@ async def list_team_tokens(
 
     service = TokenCatalogService(db)
 
+    # Fetch caller permissions and admin status for potential admin bypass
+    caller_permissions = await _get_caller_permissions(db, current_user, team_id)
+    is_admin = current_user.get("is_admin", False)
+
     try:
         tokens = await service.list_team_tokens(
             team_id=team_id,
-            user_email=current_user["email"],  # This will validate team ownership
+            user_email=current_user["email"],  # This will validate team ownership unless admin bypass applies
             include_inactive=include_inactive,
             limit=limit,
             offset=offset,
+            caller_permissions=caller_permissions,
+            is_admin=is_admin,
         )
 
         total_count = await service.count_team_tokens(

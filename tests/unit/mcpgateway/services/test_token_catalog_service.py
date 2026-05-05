@@ -544,6 +544,7 @@ class TestTokenCatalogService:
                 name="Admin Service Token",
                 team_id="team-123",
                 caller_permissions=["*"],  # Un-narrowed admin
+                is_admin=True,  # Defense-in-depth: explicit admin flag
                 expires_in_days=30,
             )
 
@@ -551,8 +552,13 @@ class TestTokenCatalogService:
             added_token = mock_db.add.call_args[0][0]
             assert added_token.team_id == "team-123"
             assert added_token.user_email == "admin@example.com"
-            # Verify membership check was skipped (only 3 DB queries, not 4)
-            assert mock_db.execute.call_count == 3
+
+            # Verify membership check was skipped by inspecting actual queries
+            # Should have: user lookup, team lookup, token name check
+            # Should NOT have: membership query (EmailTeamMember)
+            executed_queries = [str(call[0][0]) for call in mock_db.execute.call_args_list]
+            membership_query_executed = any("EmailTeamMember" in query or "email_team_members" in query.lower() for query in executed_queries)
+            assert not membership_query_executed, "Admin bypass should skip membership check"
 
     @pytest.mark.asyncio
     async def test_create_token_narrowed_admin_requires_membership(self, token_service, mock_db, mock_user, mock_team):
