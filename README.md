@@ -715,7 +715,6 @@ For upgrade instructions, migration guides, and rollback procedures, see:
 
 - **[Upgrade Guide](https://ibm.github.io/mcp-context-forge/manage/upgrade/)** — General upgrade procedures
 - **[CHANGELOG.md](./CHANGELOG.md)** — Version history and breaking changes
-- **[MIGRATION-0.7.0.md](./MIGRATION-0.7.0.md)** — Multi-tenancy migration (v0.6.x → v0.7.x)
 
 ---
 
@@ -748,7 +747,6 @@ These settings are enabled by default for security—only disable for backward c
 | `REQUIRE_JTI` | Require JTI claim in tokens for revocation support | `true` |
 | `REQUIRE_TOKEN_EXPIRATION` | Require exp claim in tokens | `true` |
 | `PUBLIC_REGISTRATION_ENABLED` | Allow public user self-registration | `false` |
-
 ### 🛡️ Content Security
 
 Content size limits prevent DoS attacks and ensure system stability:

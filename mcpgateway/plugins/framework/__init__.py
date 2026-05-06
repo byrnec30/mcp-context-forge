@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """Location: ./mcpgateway/plugins/framework/__init__.py
-Copyright 2025
+Copyright 2026
 SPDX-License-Identifier: Apache-2.0
 Authors: Fred Araujo
 
@@ -70,6 +70,7 @@ from mcpgateway.plugins.framework.models import (
     PluginPayload,
     PluginResult,
     PluginViolation,
+    UserContext,
 )
 from mcpgateway.plugins.framework.observability import ObservabilityProvider
 from mcpgateway.plugins.framework.utils import get_attr
@@ -740,4 +741,5 @@ __all__ = [
     "ToolPostInvokeResult",
     "ToolPreInvokeResult",
     "ToolPreInvokePayload",
+    "UserContext",
 ]
