@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """Location: ./mcpgateway/db.py
-Copyright 2025
+Copyright 2026
 SPDX-License-Identifier: Apache-2.0
 Authors: Mihai Criveti
 
@@ -1121,6 +1121,24 @@ class Base(DeclarativeBase):
 # ---------------------------------------------------------------------------
 # RBAC Models - SQLAlchemy Database Models
 # ---------------------------------------------------------------------------
+
+
+class MigrationMetadata(Base):
+    """Migration metadata for hermetic config snapshots.
+
+    Stores runtime configuration values at migration upgrade time so that
+    downgrade operations can be deterministic regardless of current env vars.
+    """
+
+    __tablename__ = "migration_metadata"
+
+    # Composite primary key
+    revision: Mapped[str] = mapped_column(String(64), primary_key=True)
+    key: Mapped[str] = mapped_column(String(128), primary_key=True)
+
+    # Config value and timestamp
+    value: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class Role(Base):
@@ -5493,19 +5511,23 @@ class TokenRevocation(Base):
     """Token revocation blacklist for immediate token invalidation.
 
     This model maintains a blacklist of revoked JWT tokens to provide
-    immediate token invalidation capabilities.
+    immediate token invalidation capabilities. Supports automatic cleanup
+    of expired entries and tracks revocation reasons for security auditing.
 
     Attributes:
         jti (str): JWT ID (primary key)
         revoked_at (datetime): Revocation timestamp
         revoked_by (str): Email of user who revoked the token
-        reason (str): Optional reason for revocation
+        reason (str): Optional reason for revocation (logout, idle_timeout, security, token_refresh, etc.)
+        token_expiry (datetime): Original token expiry for cleanup scheduling
+        last_activity (datetime): Last activity timestamp for idle timeout tracking
 
     Examples:
         >>> revocation = TokenRevocation(
         ...     jti="token-uuid-123",
         ...     revoked_by="admin@example.com",
-        ...     reason="Security compromise"
+        ...     reason="logout",
+        ...     token_expiry=datetime.now(timezone.utc) + timedelta(minutes=20)
         ... )
     """
 
@@ -5515,12 +5537,22 @@ class TokenRevocation(Base):
     jti: Mapped[str] = mapped_column(String(36), primary_key=True)
 
     # Revocation details
-    revoked_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+    revoked_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False, index=True)
     revoked_by: Mapped[str] = mapped_column(String(255), ForeignKey("email_users.email"), nullable=False)
     reason: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
 
+    # Token lifecycle tracking
+    token_expiry: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+    last_activity: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
     # Relationship
     revoker: Mapped["EmailUser"] = relationship("EmailUser")
+
+    # Indexes for efficient cleanup and queries
+    __table_args__ = (
+        Index("idx_token_revocations_expiry_cleanup", "token_expiry"),
+        Index("idx_token_revocations_revoked_at", "revoked_at"),
+    )
 
 
 class SSOProvider(Base):

@@ -1,8 +1,14 @@
+# -*- coding: utf-8 -*-
 # pylint: disable=no-member
-"""Add tools.manage_plugins permission to team_admin role.
+"""Location: ./mcpgateway/alembic/versions/1a02944e2671_add_manage_plugins_to_team_admin.py
+Copyright 2026
+SPDX-License-Identifier: Apache-2.0
+Authors: Mihai Criveti
 
-Revision ID: c2d3e4f5a6b7
-Revises: b1c2d3e4f5a6
+Add tools.manage_plugins permission to team_admin role.
+
+Revision ID: 1a02944e2671
+Revises: 592625561893
 Create Date: 2025-07-01 00:00:00.000000
 
 Backfills the tools.manage_plugins permission into the team-scoped team_admin role
@@ -23,8 +29,8 @@ import sqlalchemy as sa
 from sqlalchemy import text
 
 # revision identifiers, used by Alembic.
-revision: str = "c2d3e4f5a6b7"
-down_revision: Union[str, Sequence[str], None] = "b1c2d3e4f5a6"
+revision: str = "1a02944e2671"  # pragma: allowlist secret
+down_revision: Union[str, Sequence[str], None] = "592625561893"  # pragma: allowlist secret
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
