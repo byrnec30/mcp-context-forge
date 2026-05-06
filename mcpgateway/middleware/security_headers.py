@@ -7,15 +7,12 @@ Authors: Mihai Criveti
 Security Headers Middleware for ContextForge.
 
 This module implements essential security headers to prevent common attacks including
-XSS, clickjacking, MIME sniffing, and cross-origin attacks.
-
-The Content-Security-Policy (CSP) uses a nonce-based approach to allow legitimate
-inline scripts while blocking malicious ones.
+XSS, clickjacking, MIME sniffing, cross-origin attacks, and Web Cache Deception.
 """
 
 # Standard
-# Standard Library
 import secrets
+from typing import Set  # noqa: F401 - Used in main branch, needed for merge compatibility
 
 # Third-Party
 from starlette.middleware.base import BaseHTTPMiddleware
