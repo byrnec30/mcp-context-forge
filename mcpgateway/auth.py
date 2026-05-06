@@ -1,18 +1,69 @@
 # -*- coding: utf-8 -*-
 """Location: ./mcpgateway/auth.py
-Copyright 2025
+Copyright 2026
 SPDX-License-Identifier: Apache-2.0
 Authors: Mihai Criveti
 
-Shared authentication utilities.
+Authentication primitives: JWT, sessions, API tokens, and team membership.
 
-This module provides common authentication functions that can be shared
-across different parts of the application without creating circular imports.
+Purpose (for future implementers)
+---------------------------------
+``mcpgateway`` separates authentication concerns into two modules:
+
+- ``mcpgateway.auth`` (this module) - the **token / session / team model
+  layer**. Helpers here operate on stored artifacts: JWT payloads, session
+  records, API tokens, revocation records, and team-membership rows. They
+  return DB-shaped or dict results and never take a FastAPI ``Request``.
+  Because they are pure in that sense, they can be reused from any context
+  (tests, background tasks, transport hops, RBAC middleware).
+
+- ``mcpgateway.auth_context`` - the **per-request resolution layer**. Helpers
+  there take a FastAPI ``Request`` plus the ``user`` produced by the auth
+  dependency and compute what the caller is allowed to see on this request
+  (Layer 1 visibility context). See ``auth_context.py`` for its purpose block
+  and the ``AGENTS.md`` "Authentication & RBAC Overview" section for the
+  two-layer policy model.
+
+Rule of thumb
+-------------
+- Input is a ``Request``? -> belongs in ``auth_context.py``.
+- Input is a JWT payload, user email, token hash, or team ID? -> belongs here.
+
+Public surface
+--------------
+The names below form this module's stable public API. ``main.py``, routers,
+transports, middleware, and tests all consume them.
+
+    User and session resolution
+        get_current_user(...) - FastAPI dependency
+        get_user_team_roles(db, email) -> dict[team_id, role]
+
+    Token claim normalization (canonical per AGENTS.md)
+        normalize_token_teams(payload) -> list[str] | None
+        resolve_session_teams(...) -> list[str] | None
+
+Private-but-cross-module surface
+--------------------------------
+A few leading-underscore helpers are intentionally imported by other modules
+for a specific reason: they are the **synchronous variants** of async DB
+lookups, wrapped in ``asyncio.to_thread`` by callers in FastAPI hot paths.
+The underscore is a convention marker that says "prefer the async wrapper;
+if you must go sync, use this one" - not a "don't import" signal. The
+callers (``main.py``, ``transports/streamablehttp_transport.py``,
+``utils/verify_credentials.py``) all follow the same ``asyncio.to_thread``
+pattern.
+
+    _check_token_revoked_sync(jti) -> bool
+    _lookup_api_token_sync(token_hash) -> dict | None
+
+If you are tempted to import any other underscore-prefixed name from this
+module, stop and ask whether the caller should really go through a public
+wrapper or whether the helper genuinely deserves promotion to the public API.
 """
 
 # Standard
 import asyncio
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import hashlib
 import logging
 import threading
@@ -1543,6 +1594,62 @@ async def get_current_user(
                         detail="Token has been revoked",
                         headers={"WWW-Authenticate": "Bearer"},
                     )
+
+                # Idle timeout enforcement.
+                #
+                # Activity source-of-truth precedence (most-recent first):
+                #   1. Redis key `token:activity:{jti}` written by `update_activity()`.
+                #   2. Optional `last_activity` JWT claim (issuer can set this for first-request bootstrap).
+                #   3. Standard `iat` JWT claim (always present on tokens issued by this gateway).
+                # If none of the three are available we skip the idle check rather than fail-open silently —
+                # the periodic revocation check above already handles tokens that should be denied outright.
+                if settings.token_idle_timeout > 0:
+                    # First-Party
+                    from mcpgateway.services.token_blocklist_service import get_token_blocklist_service  # pylint: disable=import-outside-toplevel
+
+                    blocklist_service = get_token_blocklist_service()
+
+                    last_activity: Optional[datetime] = None
+                    try:
+                        last_activity = blocklist_service.get_last_activity(jti)
+                    except Exception as activity_lookup_error:
+                        logger.debug(f"Failed to read last activity from cache: {activity_lookup_error}")
+
+                    if last_activity is None:
+                        last_activity_ts = payload.get("last_activity") or payload.get("iat")
+                        if last_activity_ts:
+                            last_activity = datetime.fromtimestamp(last_activity_ts, tz=timezone.utc)
+
+                    if last_activity is not None:
+                        current_time = datetime.now(timezone.utc)
+                        idle_duration = current_time - last_activity
+                        max_idle = timedelta(minutes=settings.token_idle_timeout)
+
+                        if idle_duration > max_idle:
+                            # Revoke token due to idle timeout
+                            try:
+                                exp_ts = payload.get("exp")
+                                token_expiry = datetime.fromtimestamp(exp_ts, tz=timezone.utc) if exp_ts else None
+
+                                blocklist_service.revoke_token(jti=jti, revoked_by=email, reason="idle_timeout", token_expiry=token_expiry, last_activity=last_activity)
+                            except Exception as revoke_error:
+                                logger.warning(f"Failed to revoke idle token: {revoke_error}")
+
+                            logger.warning(
+                                f"Token exceeded idle timeout: jti={jti}, idle_minutes={idle_duration.total_seconds() / 60:.1f}",
+                                extra={"security_event": "idle_timeout", "security_severity": "medium", "jti": jti, "user_id": email},
+                            )
+                            raise HTTPException(
+                                status_code=status.HTTP_401_UNAUTHORIZED,
+                                detail=f"Token exceeded idle timeout ({settings.token_idle_timeout} minutes)",
+                                headers={"WWW-Authenticate": "Bearer"},
+                            )
+
+                        try:
+                            blocklist_service.update_activity(jti)
+                        except Exception as activity_error:
+                            logger.debug(f"Failed to update token activity: {activity_error}")
+
             except HTTPException:
                 raise
             except Exception as revoke_check_error:
