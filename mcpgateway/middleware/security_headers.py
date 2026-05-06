@@ -11,8 +11,9 @@ XSS, clickjacking, MIME sniffing, cross-origin attacks, and Web Cache Deception.
 """
 
 # Standard
+import re
 import secrets
-from typing import Set  # noqa: F401 - Used in main branch, needed for merge compatibility
+from typing import Any, Callable, Set
 
 # Third-Party
 from starlette.middleware.base import BaseHTTPMiddleware
