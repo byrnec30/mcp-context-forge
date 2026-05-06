@@ -2,6 +2,255 @@
 
 > All notable changes to this project will be documented in this file. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project **adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)**.
 
+## [1.0.0] - 2026-04-30 - General Availability - Technical Debt, Security Hardening, Catalog Improvements, A2A Improvements, MCP Standard Review and Sync
+
+### Overview
+
+Release 1.0.0 marks the **General Availability** of ContextForge, consolidating **93 PRs** with production-ready features, security hardening, and comprehensive testing. This release focuses on **auth and OAuth improvements**, **Rust runtime maturity**, **plugin framework enhancements**, **React-based Admin UI rewrite**, **MCP protocol compliance**, and **production deployment readiness**:
+
+- **🔐 Auth & OAuth** - End-user identity propagation, OAuth token validation with JWKS, audience learning and enforcement, Microsoft Entra ID support, account lockout protection, JWT security improvements, form-encoded token refresh support.
+- **🦀 Rust** - A2A 1.0 runtime support, MCP runtime proxy security validation, SSRF protection, dependency updates, coverage reporting.
+- **🧩 Plugins** - Runtime plugin management with global toggle and per-plugin modes, multi-tenancy support, SpanAttributeCustomizer for OTEL, SQL sanitizer, secrets detection, PII filter updates, rate-limiter tenant context fixes.
+- **🖥️ Admin UI** - React-based UI rewrite with shadcn/ui, dark/light mode theme toggle, navigation sidebar redesign, TypeScript Playwright E2E tests, HTMX bundling from package.json.
+- **🔌 MCP Protocol** - 2025-11-25 protocol compliance harness, session isolation per downstream connection, GET /mcp server-to-client stream restoration (ADR-052), FastMCP client migration for E2E tests.
+- **🌐 API & Transport** - Health API expansion with database/Redis status, multipart/form-data and form-urlencoded support for REST tools, non-JSON response handling, root_path support for reverse proxy deployments, request body size limiting.
+- **📊 Observability** - Observability documentation restructure, metrics flush transaction isolation to prevent FK violations.
+- **🏗️ Infrastructure** - Containerfile.lite consolidation, OCP deployment with managed PGO, multi-arch support, CI optimizations with path filters and ubuntu-slim runners, Docker Compose image selection flexibility.
+
+### Added
+
+#### **🔐 Auth, OAuth & Security**
+
+- **🔒 JWT Token Security – Server-Side Revocation, Idle Timeout, Logout** ([#4371](https://github.com/IBM/mcp-context-forge/pull/4371), [#4317](https://github.com/IBM/mcp-context-forge/issues/4317)) – New `TokenBlocklistService` (Redis-cached, DB-persisted) for immediate JWT invalidation. Idle-timeout enforcement on every authenticated request, with activity tracking in Redis (falls back to JWT `iat` when Redis is unavailable). New `POST /auth/logout` (Bearer auth) and enhanced `POST /admin/logout` (cookie auth) revoke the caller's token in the blocklist before clearing session state. Comprehensive audit-log fields (`security_event`, `security_severity`, `jti`, `reason`) for every revocation/idle-timeout event. New config: `TOKEN_IDLE_TIMEOUT`, `TOKEN_BLOCKLIST_CLEANUP_HOURS`. Addresses X-Force Red audit findings on session-token management.
+- **🛡️ Content Security – Malicious Pattern Detection (US-3)** ([#4072](https://github.com/IBM/mcp-context-forge/pull/4072), [#538](https://github.com/IBM/mcp-context-forge/issues/538)) – Regex-based scanning for XSS, SQL injection, command injection, and template-injection patterns. Applied on the single **and** bulk create/update paths for resources, prompts, and tools (tool `name`, `description`, and JSON-serialized `inputSchema`). New config: `CONTENT_PATTERN_DETECTION_ENABLED`, `CONTENT_BLOCKED_PATTERNS`, `CONTENT_PATTERN_VALIDATION_MODE` (`strict` | `moderate` | `lenient`). Lenient mode logs every matched pattern in a payload (was: only the first).
+- **🔒 Content Security – Prompt Template Validation (US-4)** ([#4072](https://github.com/IBM/mcp-context-forge/pull/4072), [#538](https://github.com/IBM/mcp-context-forge/issues/538)) – Pre-render validation of prompt templates: balanced-brace check, Jinja2 syntax check, and dangerous-pattern scan (`__import__`, `eval(`, dunders, etc.). New config: `CONTENT_VALIDATE_PROMPT_TEMPLATES`, `CONTENT_BLOCKED_TEMPLATE_PATTERNS`.
+- **⚡ ReDoS Defense for Pattern Scanning** ([#4072](https://github.com/IBM/mcp-context-forge/pull/4072)) – `CONTENT_PATTERN_MAX_SCAN_SIZE` (default 200 KB) caps scan input length deterministically; `CONTENT_PATTERN_REGEX_TIMEOUT` (default 1.0 s) per-pattern. Patterns are pre-compiled once at service init instead of re-compiled per request.
+- End-user identity propagation to upstream MCP servers ([#3152](https://github.com/IBM/mcp-context-forge/pull/3152))
+- OAuth token validation via JWKS for virtual-server MCP endpoints ([#4066](https://github.com/IBM/mcp-context-forge/pull/4066))
+- OAuth audience auto-learning and persistence for token validation ([#4404](https://github.com/IBM/mcp-context-forge/pull/4404))
+- Microsoft Entra ID email verification claims support ([#4396](https://github.com/IBM/mcp-context-forge/pull/4396))
+- Account lockout strengthening to prevent brute-force attacks ([#4348](https://github.com/IBM/mcp-context-forge/pull/4348))
+- Database-backed admin bypass for visibility filtering ([#4107](https://github.com/IBM/mcp-context-forge/pull/4107))
+- Non-owner users can authorize on accessible OAuth gateways ([#3935](https://github.com/IBM/mcp-context-forge/pull/3935))
+- Request body size limiting ([#4382](https://github.com/IBM/mcp-context-forge/pull/4382))
+- Comprehensive input validation for all router query parameters ([#4337](https://github.com/IBM/mcp-context-forge/pull/4337))
+- URL-encoded injection pattern blocking in SecurityValidator ([#4335](https://github.com/IBM/mcp-context-forge/pull/4335))
+- Security hardening for startup logs to prevent credential exposure ([#4507](https://github.com/IBM/mcp-context-forge/pull/4507))
+
+#### **🦀 Rust**
+
+- Rust A2A 1.0 runtime support ([#3704](https://github.com/IBM/mcp-context-forge/pull/3704))
+- Backend URL validation for SSRF protection in mcp_runtime ([#4383](https://github.com/IBM/mcp-context-forge/pull/4383))
+- Rust coverage reports ([#4458](https://github.com/IBM/mcp-context-forge/pull/4458))
+- Runtime-mutable RUST_MCP_MODE + A2A_MODE via admin API ([#4296](https://github.com/IBM/mcp-context-forge/pull/4296))
+
+#### **🧩 Plugins**
+
+- Runtime plugin management with global toggle, per-plugin mode, and cross-instance propagation ([#4292](https://github.com/IBM/mcp-context-forge/pull/4292))
+- SpanAttributeCustomizer plugin for customizable OpenTelemetry span attributes ([#4331](https://github.com/IBM/mcp-context-forge/pull/4331))
+- SQL sanitizer plugin E2E workflow and CI test ([#4313](https://github.com/IBM/mcp-context-forge/pull/4313))
+- HCS-14 UAID support for A2A agents ([#4125](https://github.com/IBM/mcp-context-forge/pull/4125))
+- Plugin config schema validation and tool binding key lookup improvements ([#4286](https://github.com/IBM/mcp-context-forge/pull/4286))
+
+#### **🖥️ Admin UI**
+
+- shadcn/ui installation for React-based UI ([#4201](https://github.com/IBM/mcp-context-forge/pull/4201))
+- Dark/light mode theme toggle ([#4347](https://github.com/IBM/mcp-context-forge/pull/4347))
+- Navigation sidebar redesigned to Figma specifications ([#4224](https://github.com/IBM/mcp-context-forge/pull/4224))
+- TypeScript Playwright E2E test framework ([#4255](https://github.com/IBM/mcp-context-forge/pull/4255))
+- Modal with form for adding MCP servers ([#4414](https://github.com/IBM/mcp-context-forge/pull/4414))
+- HTMX bundled from package.json ([#4203](https://github.com/IBM/mcp-context-forge/pull/4203))
+- Lint, formatter, and test checks for React client in CI ([#4231](https://github.com/IBM/mcp-context-forge/pull/4231))
+
+#### **🔌 API & Transport**
+
+- Health API expansion with database and Redis status ([#3826](https://github.com/IBM/mcp-context-forge/pull/3826))
+- Multipart/form-data and form-urlencoded support for REST tool invocations ([#4139](https://github.com/IBM/mcp-context-forge/pull/4139))
+- Non-JSON response and query parameter handling in REST tools ([#3873](https://github.com/IBM/mcp-context-forge/pull/3873))
+- root_path support in MCPPathRewriteMiddleware for reverse proxy deployments ([#4217](https://github.com/IBM/mcp-context-forge/pull/4217), [#4270](https://github.com/IBM/mcp-context-forge/pull/4270))
+- GET /mcp server-to-client stream restoration (ADR-052) ([#4346](https://github.com/IBM/mcp-context-forge/pull/4346))
+- MCP 2025-11-25 protocol compliance harness ([#4301](https://github.com/IBM/mcp-context-forge/pull/4301))
+
+#### **🏗️ Infrastructure & Deployment**
+
+- Preliminary experimental OCP deployment with managed PGO and MCP benchmark ([#4053](https://github.com/IBM/mcp-context-forge/pull/4053))
+- Docker Compose image selection flexibility ([#4381](https://github.com/IBM/mcp-context-forge/pull/4381))
+- Improved resource limits and process management for Docker-based deployments ([#4432](https://github.com/IBM/mcp-context-forge/pull/4432))
+
+### ⚠️ Behavior Changes
+
+#### **⏱️ `TOKEN_EXPIRY` default reduced from 10080 minutes (~7 days) to 20 minutes** ([#4371](https://github.com/IBM/mcp-context-forge/pull/4371), [#4317](https://github.com/IBM/mcp-context-forge/issues/4317))
+
+**Impact**: Any deployment that does not set `TOKEN_EXPIRY` explicitly will now issue session tokens that expire after **20 minutes** instead of ~7 days. Existing tokens already in circulation are unaffected (they retain the `exp` claim baked in at issuance), but every newly-issued token after upgrade has the shorter lifetime. Automation that re-uses a single login token for hours or days will start receiving HTTP 401 mid-flight.
+
+**Why**: Short-lived tokens are the primary mitigation for stolen-token replay, per the X-Force Red security audit (#4317). 7-day session tokens were previously called out as a finding. The new default brings the gateway in line with industry guidance (5–20 minutes for session tokens).
+
+**Migration**:
+- **Interactive sessions** — no action needed; the new `/auth/logout` endpoint and idle-timeout enforcement (60 min default) work transparently.
+- **CI/automation that needs longer-lived tokens** — set `TOKEN_EXPIRY` explicitly in `.env` (range: 5–1440 minutes), e.g. `TOKEN_EXPIRY=480` for an 8-hour shift, and pair it with `TOKEN_IDLE_TIMEOUT=0` if the workload bursts after long quiet periods.
+- **Long-running scripts using `mcpgateway.utils.create_jwt_token --exp <minutes>`** — the `--exp` flag is unaffected (it overrides the default).
+
+**Rollback**: Set `TOKEN_EXPIRY=10080` to restore the previous 7-day default.
+
+#### **🧪 Prompt templates are now rendered in a Jinja2 sandbox** ([#4072](https://github.com/IBM/mcp-context-forge/pull/4072))
+
+**Impact**: `prompt_service` now uses `jinja2.sandbox.SandboxedEnvironment` instead of plain `jinja2.Environment`. Templates that previously reached Python internals at render time will raise `PromptError: sandbox rejected unsafe operation`.
+
+**What breaks at render time**:
+- `{{ x.__class__ }}`, `{{ obj.__repr__ }}` and similar attribute traversal into Python internals
+- `{{ ''.join(items) }}` and other calls to non-whitelisted methods
+- Templates relying on `getattr()` chains or hex-escaped attribute access
+
+**Why**: The regex-based template blocklist can only match literals in the template source; Jinja2 SSTI bypasses via hex escapes (`\x5f\x5fclass\x5f\x5f`), `attr()` filter chains, or string concatenation defeat it trivially. `SandboxedEnvironment` is Jinja2's upstream-recommended defense and enforces the restriction at runtime — the regex list stays as a pre-flight hint.
+
+**Migration**: Audit stored prompt templates for attribute access on user-supplied or internal objects. Move reflection-style operations into application code; keep templates focused on data substitution.
+
+**Rollback**: If an emergency rollback is required, revert the one-line change in `mcpgateway/services/prompt_service.py::_get_jinja_env()` and restart. The regex template blocklist will continue to provide the (weaker) prior level of protection.
+
+#### **📏 Content scan-size cap (new rejection path)** ([#4072](https://github.com/IBM/mcp-context-forge/pull/4072))
+
+**Impact**: `detect_malicious_patterns()` now rejects content larger than `CONTENT_PATTERN_MAX_SCAN_SIZE` (default 200 KB) with `ContentPatternError(violation_type="content_too_large_to_scan")` → HTTP 400. This is independent of `CONTENT_MAX_RESOURCE_SIZE`.
+
+**Why**: Hard upper bound on regex execution time is the primary ReDoS defense (CWE-400). The prior thread-based timeout on Python < 3.13 was a soft timeout only — the worker thread could not be killed and kept running in the background after `join()` returned.
+
+**Migration**: If you store resources with body > 200 KB that need pattern scanning, raise `CONTENT_PATTERN_MAX_SCAN_SIZE`. Be aware that larger values raise the ReDoS blast radius proportionally — prefer keeping very large content out of pattern-scanned fields where practical.
+
+#### **🔔 Pattern detection and template validation default to enabled** ([#4072](https://github.com/IBM/mcp-context-forge/pull/4072))
+
+`CONTENT_PATTERN_DETECTION_ENABLED=true` and `CONTENT_VALIDATE_PROMPT_TEMPLATES=true` ship as defaults (in contrast to `CONTENT_STRICT_MIME_VALIDATION=false` which had a soft-launch default for US-2). Existing deployments containing any of the default blocked patterns in stored resources or prompts (e.g. Jinja2 `{{ config }}` access, shell metacharacters, `UNION SELECT`) will start returning 400s on subsequent update calls. Set either flag to `false` temporarily to audit and clean existing content before re-enabling.
+
+#### **🔒 Admin bypass no longer reveals other users' private resources** ([#4323](https://github.com/IBM/mcp-context-forge/issues/4323), [#4341](https://github.com/IBM/mcp-context-forge/pull/4341))
+
+**Action Required for integrators relying on admin-bypass reads of other users' private resources.**
+
+Admin bypass (`is_admin=true` with `teams: null` in the JWT, or dev-mode basic-auth admin) now grants access only to **public** and **team** resources via the public HTTP routes. Another user's private resources (visibility=`private`) are only accessible to their owner — admin bypass can no longer read, update, delete, list, or enumerate another user's private tools, prompts, resources, servers, gateways, or A2A agents.
+
+The service layer additionally implements an own-private carve-out for the DB-resolved admin shape `(email, None)`: a session that resolves to admin in the database AND has not been narrowed by a token scope can still access its own private rows. The verified path that exercises this carve-out today is the trusted internal A2A endpoint (`mcpgateway/main.py::_get_internal_a2a_scope_context`), which forwards the admin email through to the service layer. Other internal/in-process callers will hit the same carve-out *only* if they preserve the email on the `(email, None)` shape; OAuth token refresh, for example, performs its own owner check at `token_storage_service._refresh_access_token` and does not exercise the hybrid branch. The carve-out is **not** reachable from the public HTTP routes: `mcpgateway.auth_context.get_scoped_resource_access_context` collapses HTTP admin requests to `(None, None)`, so a normal browser-driven admin gets the same anonymous-bypass treatment as everyone else and is denied their own private rows on `GET /tools/{my_private_tool}`. Use `team`-scoped tokens or own-the-resource workflows if you need a HTTP admin to see their own private rows directly.
+
+**Enforcement applied at the service layer for:**
+
+- `ToolService.get_tool`, `list_tools`
+- `PromptService.get_prompt`, `get_prompt_details`, `list_prompts`
+- `ResourceService.get_resource_by_id`, `read_resource`, `list_resources`
+- `ServerService.get_server`, `list_servers`
+- `GatewayService.get_gateway`, `list_gateways`
+- `A2AAgentService.get_agent`, `get_agent_by_name`, `get_agent_card`, `cancel_task`, `get_task`
+- `BaseService._apply_access_control` and `BaseService._apply_visibility_scope` (list endpoints inheriting from `BaseService`, plus completion / tag enumeration)
+
+**Behavior for denied access:**
+
+- Direct-ID reads return `404 Not Found` (not 403) to avoid disclosing the existence of private resources.
+- A structured log event (`*_access_denied`, e.g. `tool_access_denied`) is emitted for forensics.
+
+**What's unchanged:**
+
+- Public-resource access for admin bypass — unchanged.
+- Team-resource access for admin bypass — unchanged.
+- Resource owners can still access their own private resources via owner-email matching at the service layer.
+- DB-resolved admin sessions can still see their own private rows via internal / non-HTTP call paths that preserve the admin email on a `(email, None)` shape — the trusted internal A2A endpoint is the verified example today. HTTP admin requests are intentionally collapsed to `(None, None)` and do not fire the own-private carve-out — by design, to avoid HTTP being a stealthy escalation surface.
+- Scoped tokens (`teams: [...]`) continue to use their scoped team list; admin-bypass detection still requires both `is_admin=true` **and** `teams: null`.
+
+**Migration guidance for integrators:**
+
+- Audit tokens/scripts that currently rely on an admin listing or reading another user's private data. Transfer resource ownership or switch them to `team`-scoped visibility if the cross-user access is intentional.
+- If an admin genuinely needs cross-user visibility for an operational scenario, prefer a properly scoped token (`teams: ["<target_team>"]`) over relying on bypass.
+- Callers of `server_service.get_server`, `gateway_service.get_gateway`, `prompt_service.get_prompt_details`, `resource_service.get_resource_by_id`, and `a2a_service.get_agent_by_name`/`get_agent_card` now accept new optional `user_email` / `token_teams` parameters. Omitting them evaluates as admin-bypass (public + team access, other-users' private denied). Call sites in `mcpgateway/main.py` and `mcpgateway/admin.py` have been updated to forward the caller's scope via `get_scoped_resource_access_context` (now in `mcpgateway/auth_context.py`).
+
+**Related security invariants (see `AGENTS.md`):**
+
+- `public` is platform-public scope, not internet-anonymous.
+- Token-team interpretation continues to flow through `normalize_token_teams()` / `resolve_session_teams()` in `mcpgateway/auth.py`.
+- Non-JWT admin (basic-auth / dev-mode) retains unrestricted access to public and team resources, but is now also denied direct reads of other users' private resources.
+
+### Changed
+
+- Consolidated Rust workspace under `crates/` ([#4087](https://github.com/IBM/mcp-context-forge/pull/4087))
+- Containerfile.lite consolidation; deprecated other Containerfiles ([#4297](https://github.com/IBM/mcp-context-forge/pull/4297))
+- Removed Alpine container references ([#4170](https://github.com/IBM/mcp-context-forge/pull/4170))
+- Parallelized pylint with --jobs 0 ([#4256](https://github.com/IBM/mcp-context-forge/pull/4256))
+- Moved scan-style tests to pre-commit hooks and optimized slow tests ([#4257](https://github.com/IBM/mcp-context-forge/pull/4257))
+- Updated CI uv action and linted YAML ([#4364](https://github.com/IBM/mcp-context-forge/pull/4364))
+- Routed lightweight workflow jobs to ubuntu-slim runners ([#4409](https://github.com/IBM/mcp-context-forge/pull/4409))
+- Enabled path filters for lint and pytest workflows ([#4411](https://github.com/IBM/mcp-context-forge/pull/4411))
+- Updated pyspelling to use uv tool run with transitive dependency pins ([#4386](https://github.com/IBM/mcp-context-forge/pull/4386))
+- Migrated E2E MCP tests from wrapper to FastMCP Client ([#4421](https://github.com/IBM/mcp-context-forge/pull/4421))
+- Restructured observability documentation for clarity and neutrality ([#4249](https://github.com/IBM/mcp-context-forge/pull/4249))
+- Updated plugin-bindings-api documentation ([#4199](https://github.com/IBM/mcp-context-forge/pull/4199), [#4355](https://github.com/IBM/mcp-context-forge/pull/4355))
+- Updated documentation for various features ([#4279](https://github.com/IBM/mcp-context-forge/pull/4279))
+
+### Removed
+
+- Removed hardcoded home paths ([#4161](https://github.com/IBM/mcp-context-forge/pull/4161))
+- Removed obsolete Claude skills and completed 0.7.0 migration artifacts ([#4251](https://github.com/IBM/mcp-context-forge/pull/4251))
+- Removed PII filter plugin tests ([#4333](https://github.com/IBM/mcp-context-forge/pull/4333))
+- Removed qr_code_server from mcp-servers ([#4388](https://github.com/IBM/mcp-context-forge/pull/4388))
+
+### Fixed
+
+#### **🔐 Security & Auth**
+
+- Protocol and transport hardening for auth and lifecycle consistency ([#3344](https://github.com/IBM/mcp-context-forge/pull/3344))
+- Use check_any_team for API tokens in MCP transports ([#3687](https://github.com/IBM/mcp-context-forge/pull/3687))
+- OAuth flows now use gateway CA certificates for self-signed servers ([#4048](https://github.com/IBM/mcp-context-forge/pull/4048))
+- Server ID validation in Rust MCP runtime proxy to prevent unauthorized access ([#4066](https://github.com/IBM/mcp-context-forge/pull/4066))
+- Proxy auth database lookup for team/admin context ([#4320](https://github.com/IBM/mcp-context-forge/pull/4320))
+- Admin bypass prevented from accessing private resources ([#4341](https://github.com/IBM/mcp-context-forge/pull/4341))
+- Form-encoded response parsing in OAuth `refresh_token()` ([#4259](https://github.com/IBM/mcp-context-forge/pull/4259))
+- Vault plugin can inject auth for OAuth authorization_code gateways ([#4416](https://github.com/IBM/mcp-context-forge/pull/4416))
+- Skip audience enforcement for virtual servers when resource is not configured ([#4410](https://github.com/IBM/mcp-context-forge/pull/4410))
+- Handle missing expires_in in OAuth token response ([#4447](https://github.com/IBM/mcp-context-forge/pull/4447))
+- OAuth audience-learning regressions ([#4475](https://github.com/IBM/mcp-context-forge/pull/4475))
+
+#### **🧩 Plugins**
+
+- Content security US-3 and US-4 ([#4072](https://github.com/IBM/mcp-context-forge/pull/4072))
+- Process content when structuredContent is null ([#4252](https://github.com/IBM/mcp-context-forge/pull/4252))
+- Populate tenant_id in GlobalContext for by_tenant rate limiting ([#4380](https://github.com/IBM/mcp-context-forge/pull/4380))
+- Trimmed secrets detection plugin coverage ([#4250](https://github.com/IBM/mcp-context-forge/pull/4250))
+- Bumped cpex-secrets-detection to 0.2.0 ([#4338](https://github.com/IBM/mcp-context-forge/pull/4338))
+- Updated cpex-url-reputation to 0.2.0 ([#4350](https://github.com/IBM/mcp-context-forge/pull/4350))
+- Bumped cpex-pii-filter to 0.2.1 ([#4376](https://github.com/IBM/mcp-context-forge/pull/4376))
+
+#### **🔌 API & Transport**
+
+- Cache API hang on Redis failure with no fallback ([#4074](https://github.com/IBM/mcp-context-forge/pull/4074))
+- Tool error response validation ([#4204](https://github.com/IBM/mcp-context-forge/pull/4204))
+- Clean up server_tool_association before tool deletion ([#4263](https://github.com/IBM/mcp-context-forge/pull/4263))
+- Return 405 on session-less GET /mcp ([#4284](https://github.com/IBM/mcp-context-forge/pull/4284))
+- Isolate upstream MCP sessions per downstream session ([#4299](https://github.com/IBM/mcp-context-forge/pull/4299))
+- Reinitialize logging after bootstrap_db ([#4379](https://github.com/IBM/mcp-context-forge/pull/4379))
+- Establish MCP session before notification/id-less envelope tests ([#4439](https://github.com/IBM/mcp-context-forge/pull/4439))
+- Metrics flush split into separate transactions to prevent FK violation rollbacks ([#4433](https://github.com/IBM/mcp-context-forge/pull/4433))
+- Harden cache control and improve test coverage ([#4461](https://github.com/IBM/mcp-context-forge/pull/4461))
+- Correct failing tests on main ([#4474](https://github.com/IBM/mcp-context-forge/pull/4474))
+
+#### **🖥️ Admin UI**
+
+- npm vulnerabilities ([#4366](https://github.com/IBM/mcp-context-forge/pull/4366))
+- Docker build failure ([#4369](https://github.com/IBM/mcp-context-forge/pull/4369))
+- Added client build output to .gitignore ([#4372](https://github.com/IBM/mcp-context-forge/pull/4372))
+
+#### **🏗️ Infrastructure & Dependencies**
+
+- Missing dev dependencies ([#4326](https://github.com/IBM/mcp-context-forge/pull/4326), [#4351](https://github.com/IBM/mcp-context-forge/pull/4351))
+- Use check-runs API and peel annotated tags in docker-release ([#4242](https://github.com/IBM/mcp-context-forge/pull/4242))
+- Pinned brotli transitive dependency version ([#4243](https://github.com/IBM/mcp-context-forge/pull/4243))
+- Testing-up image local interpolation in echo ([#4385](https://github.com/IBM/mcp-context-forge/pull/4385))
+- Resolved Rust Cargo dependency - updated rustls-webpki ([#4408](https://github.com/IBM/mcp-context-forge/pull/4408))
+
+### Security
+
+- End-user identity propagation with proper validation ([#3152](https://github.com/IBM/mcp-context-forge/pull/3152))
+- Comprehensive auth and transport hardening ([#3344](https://github.com/IBM/mcp-context-forge/pull/3344))
+- Server ID validation in Rust MCP runtime ([#4066](https://github.com/IBM/mcp-context-forge/pull/4066))
+- SSRF protection in mcp_runtime backend URL validation ([#4383](https://github.com/IBM/mcp-context-forge/pull/4383))
+- JWT token security improvements ([#4371](https://github.com/IBM/mcp-context-forge/pull/4371))
+- Account lockout protection against brute-force attacks ([#4348](https://github.com/IBM/mcp-context-forge/pull/4348))
+- Input validation across all router query parameters ([#4337](https://github.com/IBM/mcp-context-forge/pull/4337))
+- URL-encoded injection pattern blocking ([#4335](https://github.com/IBM/mcp-context-forge/pull/4335))
+- Admin bypass prevented from accessing private resources ([#4341](https://github.com/IBM/mcp-context-forge/pull/4341))
+- Request body size limiting ([#4382](https://github.com/IBM/mcp-context-forge/pull/4382))
+
 ## [1.0.0-RC3] - 2026-04-14 - Auth Hardening, Plugin Multi-Tenancy, Rust Runtime & Multi-Arch
 
 ### Overview

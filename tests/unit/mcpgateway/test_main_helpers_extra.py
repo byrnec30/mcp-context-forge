@@ -1,5 +1,11 @@
 # -*- coding: utf-8 -*-
-"""Extra tests for main helpers."""
+"""Location: ./tests/unit/mcpgateway/test_main_helpers_extra.py
+Copyright 2026
+SPDX-License-Identifier: Apache-2.0
+Authors: Mihai Criveti
+
+Extra tests for main helpers.
+"""
 
 # Standard
 from types import SimpleNamespace
@@ -26,7 +32,7 @@ def test_get_token_teams_and_rpc_context():
     req.state = MagicMock()
     req.state._jwt_verified_payload = ("token", {"teams": ["t1"], "is_admin": True})
 
-    email, teams, is_admin = main._get_rpc_filter_context(req, {"email": "user@example.com"})
+    email, teams, is_admin = main.get_rpc_filter_context(req, {"email": "user@example.com"})
 
     assert email == "user@example.com"
     assert teams == ["t1"]
